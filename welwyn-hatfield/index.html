@@ -3,12 +3,12 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Article 4 boundary tracing — Welwyn Hatfield</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="../tool/tracer.css?v=1793815210">
+<link rel="stylesheet" href="../tool/tracer.css?v=1793819764">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head><body>
 <header>
   <h1>Article 4 tracing &mdash; Welwyn Hatfield</h1>
-  <span class="pill" id="progress">0 of 3 maps done</span>
+  <span class="pill" id="progress">0 of 7 areas done</span>
   <span class="spacer"></span>
   <button id="help">? How it works</button>
 </header>
@@ -17,12 +17,11 @@
     <div id="drawbar"><b>Drawing:</b> click the corners of the shaded area &middot; <span id="drawcount">0</span> so far
       <button id="drawfinish" class="good">Finish shape</button><button id="drawundo">Undo corner</button><button id="drawcancel">Cancel</button></div>
     <div class="panel">
-      <h3>Maps to trace</h3>
-      <div class="step">For each council map: <b>Go there</b>, then <b>Draw a shape</b> around every shaded area, then tick the box.</div>
-      <div id="sheets"></div>
+      <div class="panelhead"><h3>Areas</h3><button id="togglelist" class="tiny">hide list</button></div>
+      <div id="arealist"></div>
       <div id="status"></div>
       <div class="bottom">
-        <button id="submit" class="good">&#10003; Submit &mdash; all maps done</button>
+        <button id="submit" class="good">&#10003; Submit &mdash; all areas done</button>
         <button id="backup">Download a backup of my work</button>
         <label style="display:block;margin-top:5px"><span class="small">Restore from a backup file:</span> <input type="file" id="restorefile" accept=".json,.geojson" style="font-size:11px"></label>
         <button id="clearall" class="danger">Clear everything</button>
@@ -30,15 +29,24 @@
     </div>
   </div>
   <div class="docs">
-    <div class="tabs"><button id="tab-sheets" class="active">Council maps</button><button id="tab-docs">Full document</button></div>
-    <div class="docbar">
+    <div class="tabs"><button id="tab-areas" class="active">Area to trace</button><button id="tab-docs">Full signed document</button></div>
+    <div class="docbar" id="areabar">
+      <button id="aprev">&larr; Previous</button><span id="areahead" class="areahead"></span><button id="anext">Next &rarr;</button>
+      <button id="areafit">fit</button><span class="zoomhint">scroll to zoom &middot; drag to move</span>
+    </div>
+    <div class="docbar" id="docbar" style="display:none">
       <button id="docprev">&larr;</button><select id="docsel"></select><button id="docnext">&rarr;</button>
       <button id="docfit">fit</button><span class="zoomhint">scroll to zoom &middot; drag to move</span>
     </div>
-    <div class="viewer" id="viewer"><img id="docimg" alt="council map"></div>
+    <div class="viewer" id="viewer"><img id="docimg" alt="council map snippet"></div>
+    <div class="areaactions" id="areaactions">
+      <div class="row"><span id="areastat" class="areastat"></span><button id="arecentre" class="tiny">re-centre map</button></div>
+      <div class="row"><button id="adraw" class="primary">&#9998; Draw a shape</button><button id="adone" class="good">&#10003; Done &mdash; next area &rarr;</button></div>
+      <textarea id="anote" placeholder="Anything unclear about this area? Write it here instead of guessing (optional)"></textarea>
+    </div>
   </div>
 </div>
 <div class="overlay" id="overlay"><div class="card"><h2 id="cardtitle"></h2><div id="cardbody"></div></div></div>
-<script>window.JOB = {"slug": "welwyn-hatfield", "display": "Welwyn Hatfield", "direction": "Employment Article 4 Direction (Class MA), as modified by the Secretary of State on 18 October 2022", "shade_description": "orange or yellow shaded areas with a red/orange outline", "home": {"lat": 51.77, "lng": -0.19, "zoom": 12}, "sheets": [{"id": "map1", "name": "Map 1: Welwyn Garden City Employment Area", "image": "maps/map1-welwyn-garden-city-employment-area.jpg", "center": {"lat": 51.8035, "lng": -0.1955}, "zoom": 15, "expected_parts": 2, "hint": "One large shaded area over the industrial estate east of the railway (Broadwater Road / Tewin Road / Black Fan Road), plus one small triangle on its own south-east of it, next to Little Mead."}, {"id": "map2", "name": "Map 2: Hatfield Business Park, Beaconsfield Road and Great North Road", "image": "maps/map2-hatfield-business-park-beaconsfield-rd-great-north-rd.jpg", "center": {"lat": 51.7625, "lng": -0.23}, "zoom": 14, "expected_parts": 5, "hint": "About five separate shaded areas: the big Hatfield Business Park block (with a white cut-out inside it), Bishop Square to its south, a thin sliver at The Ryde (top right), and two narrow strips along Great North Road (right-hand side)."}, {"id": "map3", "name": "Map 3: Sopers Road, Cuffley", "image": "maps/map3-sopers-road-cuffley.jpg", "center": {"lat": 51.7073, "lng": -0.1086}, "zoom": 17, "expected_parts": 1, "hint": "One shaded block: the Sopers Road industrial estate, between the railway and the footpath, south of Station Road."}], "docs": [{"name": "Page 1 \u2014 the modified direction (lists the three maps)", "image": "docs/page-1.jpg"}, {"name": "Page 2 \u2014 entry into force and signature", "image": "docs/page-2.jpg"}, {"name": "Page 3 \u2014 Map 1", "image": "docs/page-3.jpg"}, {"name": "Page 4 \u2014 Map 2", "image": "docs/page-4.jpg"}, {"name": "Page 5 \u2014 Map 3", "image": "docs/page-5.jpg"}], "reference": {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-0.21199728331228535, 51.793607913669064], [-0.18000271668771467, 51.793607913669064], [-0.18000271668771467, 51.813392086330936], [-0.21199728331228535, 51.813392086330936], [-0.21199728331228535, 51.793607913669064]]]}}, {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-0.25743785353429893, 51.757208633093526], [-0.22256214646570105, 51.757208633093526], [-0.22256214646570105, 51.778791366906475], [-0.25743785353429893, 51.778791366906475], [-0.25743785353429893, 51.757208633093526]]]}}, {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-0.11680503334619263, 51.70540287769784], [-0.10519496665380737, 51.70540287769784], [-0.10519496665380737, 51.712597122302164], [-0.11680503334619263, 51.712597122302164], [-0.11680503334619263, 51.70540287769784]]]}}]}};</script>
-<script src="../tool/tracer.js?v=1793815210"></script>
+<script>window.JOB = {"slug": "welwyn-hatfield", "display": "Welwyn Hatfield", "direction": "Employment Article 4 Direction (Class MA), as modified by the Secretary of State on 18 October 2022", "shade_description": "orange or yellow shaded areas with a red/orange outline", "home": {"lat": 51.77, "lng": -0.19, "zoom": 12}, "docs": [{"name": "Page 1 \u2014 the modified direction (lists the three maps)", "image": "docs/page-1.jpg"}, {"name": "Page 2 \u2014 entry into force and signature", "image": "docs/page-2.jpg"}, {"name": "Page 3 \u2014 Map 1", "image": "docs/page-3.jpg"}, {"name": "Page 4 \u2014 Map 2", "image": "docs/page-4.jpg"}, {"name": "Page 5 \u2014 Map 3", "image": "docs/page-5.jpg"}], "sheets": [{"id": "map1", "name": "Map 1: Welwyn Garden City Employment Area"}, {"id": "map2", "name": "Map 2: Hatfield Business Park, Beaconsfield Road and Great North Road"}, {"id": "map3", "name": "Map 3: Sopers Road, Cuffley"}], "areas": [{"id": "map1-1", "sheet": "map1", "name": "Welwyn Garden City Employment Area \u2014 main block", "image": "areas/map1-1.jpg", "bounds": [[51.797409, -0.200962], [51.811133, -0.182241]], "expected_parts": 1, "hint": "One big shaded area east of the railway: Broadwater Road, Tewin Road, Black Fan Road, down to Peartree. Its west side has a notch cut in around Hunters Bridge / the works \u2014 follow the edge of the shading, not the railway."}, {"id": "map1-2", "sheet": "map1", "name": "Little Mead triangle", "image": "areas/map1-2.jpg", "bounds": [[51.797218, -0.183214], [51.799707, -0.181037]], "expected_parts": 1, "hint": "A small triangle at Little Ridge, between Little Mead and Kennelwood Lane. Its tip touches the big area\u2019s corner \u2014 draw it as its own separate shape."}, {"id": "map2-1", "sheet": "map2", "name": "Hatfield Business Park \u2014 main block", "image": "areas/map2-1.jpg", "bounds": [[51.765069, -0.251621], [51.775811, -0.234719]], "expected_parts": 1, "hint": "One large shape covering the business park and the bus depot. It wraps around a white gap (the Depot) in its southern half \u2014 the gap is not part of the area, so follow the shading edge around it."}, {"id": "map2-2", "sheet": "map2", "name": "Bishop Square", "image": "areas/map2-2.jpg", "bounds": [[51.761596, -0.24512], [51.764493, -0.240764]], "expected_parts": 1, "hint": "The Bishop Square office site west of Comet Way, just north of the Galleria."}, {"id": "map2-3", "sheet": "map2", "name": "Great North Road \u2014 Beaconsfield Road wedge and the strip east of the road", "image": "areas/map2-3.jpg", "bounds": [[51.762736, -0.218965], [51.769307, -0.216364]], "expected_parts": 2, "hint": "TWO shapes here: the wide wedge west of Great North Road (Beaconsfield Road / the Wks site), and the thin strip on the east side of Great North Road running from the railway bridge down past the station. Draw them separately."}, {"id": "map2-4", "sheet": "map2", "name": "The Ryde sliver", "image": "areas/map2-4.jpg", "bounds": [[51.770407, -0.21955], [51.773987, -0.2176]], "expected_parts": 1, "hint": "A narrow strip along the railway at The Ryde, north of the Great North Road junction."}, {"id": "map3-1", "sheet": "map3", "name": "Sopers Road industrial estate, Cuffley", "image": "areas/map3-1.jpg", "bounds": [[51.706047, -0.109511], [51.708176, -0.107398]], "expected_parts": 1, "hint": "The industrial estate between the railway and the footpath, south of Station Road."}], "reference": {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-0.21199728331228535, 51.793607913669064], [-0.18000271668771467, 51.793607913669064], [-0.18000271668771467, 51.813392086330936], [-0.21199728331228535, 51.813392086330936], [-0.21199728331228535, 51.793607913669064]]]}}, {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-0.25743785353429893, 51.757208633093526], [-0.22256214646570105, 51.757208633093526], [-0.22256214646570105, 51.778791366906475], [-0.25743785353429893, 51.778791366906475], [-0.25743785353429893, 51.757208633093526]]]}}, {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-0.11680503334619263, 51.70540287769784], [-0.10519496665380737, 51.70540287769784], [-0.10519496665380737, 51.712597122302164], [-0.11680503334619263, 51.712597122302164], [-0.11680503334619263, 51.70540287769784]]]}}]}};</script>
+<script src="../tool/tracer.js?v=1793819764"></script>
 </body></html>

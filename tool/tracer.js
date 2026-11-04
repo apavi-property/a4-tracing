@@ -1,17 +1,22 @@
-/* Article 4 boundary tracer — shared app. Page supplies window.JOB (see any borough's index.html). */
+/* Article 4 boundary tracer — shared app. The page supplies window.JOB:
+   { slug, display, shade_description, home, sheets[], areas[], docs[], reference }
+   One "area" = one shaded area on a council map sheet, shown as a close-up snippet on
+   the right; the live map on the left follows whichever area is selected. */
 (function () {
   'use strict';
   var JOB = window.JOB;
   var KEY = 'a4trace:' + JOB.slug;
   var $ = function (id) { return document.getElementById(id); };
+  var AREAS = JOB.areas;
+  var SHEETS = {}; JOB.sheets.forEach(function (s) { SHEETS[s.id] = s; });
 
   // ---------- state ----------
-  var shapes = [];            // {sheet, name, latlngs, layer}
-  var sheetState = {};        // sheetId -> {done:bool, note:string}
-  var drawing = null;         // {sheet, latlngs, line, firstMarker}
+  var shapes = [];            // {area, name, latlngs, layer}
+  var areaState = {};         // areaId -> {done:bool, note:string}
+  var drawing = null;         // {area, latlngs, line, firstMarker}
   var selected = -1, editMarkers = [], midMarkers = [];
-  var activeSheet = JOB.sheets[0].id;
-  JOB.sheets.forEach(function (s) { sheetState[s.id] = { done: false, note: '' }; });
+  var cur = 0;                // index into AREAS of the area being worked on
+  AREAS.forEach(function (a) { areaState[a.id] = { done: false, note: '' }; });
 
   // ---------- map ----------
   var map = L.map('map', { doubleClickZoom: false, zoomSnap: 0.5 }).setView([JOB.home.lat, JOB.home.lng], JOB.home.zoom);
@@ -19,24 +24,63 @@
   var sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Esri World Imagery' });
   L.control.layers({ 'Street map': osm, 'Satellite': sat }, null, { position: 'topright' }).addTo(map);
   L.control.scale({ imperial: false }).addTo(map);
-  // the side panel and drawing bar sit inside the map div: their clicks must not plant corners
   [document.querySelector('.panel'), $('drawbar')].forEach(function (el) {
     L.DomEvent.disableClickPropagation(el); L.DomEvent.disableScrollPropagation(el);
   });
-
-  var refLayer = null;
-  if (JOB.reference && JOB.reference.features && JOB.reference.features.length) {
-    refLayer = L.geoJSON(JOB.reference, { style: { color: '#777', weight: 2, dashArray: '6 6', fillOpacity: 0.06 }, interactive: false }).addTo(map);
-  }
+  // faint box showing where the current snippet sits on the live map
+  var areaBox = L.rectangle([[0, 0], [0, 0]], { color: '#1a73e8', weight: 2, dashArray: '6 6', fill: false, interactive: false }).addTo(map);
 
   function status(t) { $('status').textContent = t || ''; }
+  function areaById(id) { for (var i = 0; i < AREAS.length; i++) if (AREAS[i].id === id) return AREAS[i]; }
+  function areaIndex(id) { for (var i = 0; i < AREAS.length; i++) if (AREAS[i].id === id) return i; return -1; }
+  function shapesFor(id) { var out = []; shapes.forEach(function (s, i) { if (s.area === id) out.push(i); }); return out; }
+
+  // ---------- selecting an area: right snippet + left map move together ----------
+  function goTo(i, flyMap) {
+    if (drawing) cancelDraw();
+    finishEdit();
+    cur = Math.max(0, Math.min(AREAS.length - 1, i));
+    var a = AREAS[cur];
+    if (flyMap !== false) map.fitBounds(a.bounds, { padding: [30, 30], maxZoom: 18 });
+    areaBox.setBounds(a.bounds);
+    setTab('areas');
+    showImage(a.image);
+    renderRight(); renderList();
+  }
+  function renderRight() {
+    var a = AREAS[cur], sh = SHEETS[a.sheet], st = areaState[a.id], mine = shapesFor(a.id);
+    $('areahead').innerHTML = '<b>Area ' + (cur + 1) + ' of ' + AREAS.length + '</b> &middot; ' + esc(sh ? sh.name : a.sheet) +
+      (a.hint ? '<div class="hint">' + esc(a.hint) + '</div>' : '');
+    $('areastat').textContent = mine.length ? (mine.length + ' shape' + (mine.length === 1 ? '' : 's') + ' drawn' + (st.done ? ' — done' : '')) : 'Nothing drawn yet for this area';
+    $('areastat').className = 'areastat' + (st.done ? ' ok' : (mine.length ? ' part' : ''));
+    $('aprev').disabled = cur === 0;
+    $('anext').disabled = cur === AREAS.length - 1;
+    $('adone').textContent = cur === AREAS.length - 1 ? '✓ Done with this area' : '✓ Done — next area →';
+    $('anote').value = st.note;
+  }
+  $('aprev').onclick = function () { goTo(cur - 1); };
+  $('anext').onclick = function () { goTo(cur + 1); };
+  $('adraw').onclick = function () { startDraw(AREAS[cur].id); };
+  $('arecentre').onclick = function () { map.fitBounds(AREAS[cur].bounds, { padding: [30, 30], maxZoom: 18 }); };
+  $('anote').onchange = function () { areaState[AREAS[cur].id].note = this.value; save(); renderList(); };
+  $('adone').onclick = function () {
+    var a = AREAS[cur], st = areaState[a.id], n = shapesFor(a.id).length;
+    if (!n && !st.note.trim()) {
+      openCard('Nothing drawn for this area', '<p>Draw a shape around the shaded area first. If you really cannot trace it (the map is unclear, or you can\'t find the place), write a note in the box under the snippet and press Done again.</p><div class="actions"><button class="primary" id="closesubmit">OK</button></div>');
+      return;
+    }
+    st.done = true; save();
+    if (cur < AREAS.length - 1) goTo(cur + 1);
+    else { renderRight(); renderList(); openCard('All areas visited', '<p>Every area is marked done. Check the list on the left: anything without a tick still needs a shape or a note. Then press <b>Submit</b>.</p><div class="actions"><button class="primary" id="closesubmit">OK</button></div>'); }
+  };
 
   // ---------- drawing ----------
-  function startDraw(sheetId) {
+  function startDraw(areaId) {
     finishEdit();
     if (drawing) cancelDraw();
-    activeSheet = sheetId; renderSheets();
-    drawing = { sheet: sheetId, latlngs: [], line: L.polyline([], { color: '#d00', weight: 3 }).addTo(map), firstMarker: null };
+    var a = areaById(areaId);
+    if (!map.getBounds().intersects(L.latLngBounds(a.bounds))) map.fitBounds(a.bounds, { padding: [30, 30], maxZoom: 18 });
+    drawing = { area: areaId, latlngs: [], line: L.polyline([], { color: '#d00', weight: 3 }).addTo(map), firstMarker: null };
     $('map').classList.add('drawing');
     $('drawbar').style.display = 'block';
     $('drawcount').textContent = '0';
@@ -45,7 +89,6 @@
   function addVertex(ll) {
     var prev = drawing.latlngs[drawing.latlngs.length - 1];
     if (prev && map.latLngToLayerPoint(ll).distanceTo(map.latLngToLayerPoint(prev)) < 4) return;
-    // a click back near the first corner closes the shape
     if (drawing.latlngs.length >= 3 && map.latLngToLayerPoint(ll).distanceTo(map.latLngToLayerPoint(drawing.latlngs[0])) < 14) { closeDraw(); return; }
     drawing.latlngs.push(ll);
     drawing.line.setLatLngs(drawing.latlngs);
@@ -77,16 +120,16 @@
       if (!last || map.latLngToLayerPoint(ll).distanceTo(map.latLngToLayerPoint(last)) > 4) { pts.push(ll); last = ll; }
     });
     if (pts.length < 3) { status('A shape needs at least 3 corners — keep clicking.'); return; }
-    var sheet = drawing.sheet;
+    var area = drawing.area;
     map.removeLayer(drawing.line);
     if (drawing.firstMarker) map.removeLayer(drawing.firstMarker);
     drawing = null;
     $('map').classList.remove('drawing');
     $('drawbar').style.display = 'none';
-    var n = shapes.filter(function (s) { return s.sheet === sheet; }).length + 1;
-    addShape(sheet, 'Shape ' + n, pts);
-    save(); renderSheets(); selectShape(shapes.length - 1);
-    status('Shape saved. Drag the yellow dots to adjust it, or draw the next one.');
+    var n = shapesFor(area).length + 1;
+    addShape(area, 'Shape ' + n, pts);
+    save(); renderList(); renderRight(); selectShape(shapes.length - 1);
+    status('Shape saved. Drag the yellow dots to adjust it, then press "Done — next area" on the right.');
   }
   function onMapItself(e) {
     var t = e.originalEvent && e.originalEvent.target;
@@ -105,9 +148,9 @@
   $('drawcancel').onclick = cancelDraw;
 
   // ---------- shapes ----------
-  function addShape(sheet, name, latlngs) {
+  function addShape(area, name, latlngs) {
     var layer = L.polygon(latlngs, { color: '#d00', weight: 3, fillOpacity: 0.18 }).addTo(map);
-    var s = { sheet: sheet, name: name, latlngs: latlngs.map(function (ll) { return L.latLng(ll); }), layer: layer };
+    var s = { area: area, name: name, latlngs: latlngs.map(function (ll) { return L.latLng(ll); }), layer: layer };
     layer.on('click', function (e) {
       if (drawing) { addVertex(e.latlng); return; }
       L.DomEvent.stop(e.originalEvent); selectShape(shapes.indexOf(s));
@@ -119,19 +162,20 @@
     finishEdit();
     map.removeLayer(shapes[i].layer);
     shapes.splice(i, 1);
-    save(); renderSheets();
+    save(); renderList(); renderRight();
   }
   function finishEdit() {
     editMarkers.forEach(function (m) { map.removeLayer(m); });
     midMarkers.forEach(function (m) { map.removeLayer(m); });
     editMarkers = []; midMarkers = []; selected = -1;
-    renderSheets();
+    renderList();
   }
   function selectShape(i) {
     finishEdit();
     selected = i;
     var s = shapes[i];
-    activeSheet = s.sheet;
+    var ai = areaIndex(s.area);
+    if (ai >= 0 && ai !== cur) { cur = ai; areaBox.setBounds(AREAS[cur].bounds); showImage(AREAS[cur].image); renderRight(); }
     s.latlngs.forEach(function (ll, vi) {
       var m = L.circleMarker(ll, { radius: 8, weight: 2, color: '#d00', fillColor: '#ffe600', fillOpacity: 1 }).addTo(map);
       enableDrag(m, function (nll) { s.latlngs[vi] = nll; s.layer.setLatLngs(s.latlngs); }, function () { rebuildMids(s); save(); });
@@ -143,7 +187,7 @@
       editMarkers.push(m);
     });
     rebuildMids(s);
-    renderSheets();
+    renderList();
     status('Editing: drag a yellow dot to move it, drag a white dot to add a corner, right-click a dot to remove it. Esc when done.');
   }
   function rebuildMids(s) {
@@ -173,77 +217,62 @@
     });
   }
 
-  // ---------- sheets panel ----------
-  function sheetById(id) { for (var i = 0; i < JOB.sheets.length; i++) if (JOB.sheets[i].id === id) return JOB.sheets[i]; }
+  // ---------- left list (overview) ----------
   function esc(s) { return (s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
-  function renderSheets() {
-    var div = $('sheets'); div.innerHTML = '';
-    var doneCount = 0;
-    JOB.sheets.forEach(function (sh, idx) {
-      var st = sheetState[sh.id], mine = [];
-      shapes.forEach(function (s, i) { if (s.sheet === sh.id) mine.push(i); });
+  function renderList() {
+    var div = $('arealist'); div.innerHTML = '';
+    var doneCount = 0, lastSheet = null;
+    AREAS.forEach(function (a, i) {
+      var st = areaState[a.id], mine = shapesFor(a.id);
       if (st.done) doneCount++;
-      var box = document.createElement('div');
-      box.className = 'sheet' + (sh.id === activeSheet ? ' active' : '') + (st.done ? ' done' : '');
-      var h = '<div class="title"><span class="num">' + (idx + 1) + '</span><span>' + esc(sh.name) + '</span></div>';
-      h += '<div class="hint">' + esc(sh.hint) + '</div>';
-      h += '<div class="btns"><button data-act="show" data-s="' + sh.id + '">&#128196; Show this map</button>' +
-           '<button data-act="goto" data-s="' + sh.id + '">&#9992; Go there on the map</button>' +
-           '<button data-act="draw" data-s="' + sh.id + '" class="primary">&#9998; Draw a shape</button></div>';
-      if (!mine.length) h += '<div class="small">No shapes drawn yet for this map.</div>';
-      mine.forEach(function (i) {
-        var s = shapes[i];
-        h += '<div class="shape' + (i === selected ? ' sel' : '') + '"><span class="nm">' + esc(s.name) + ' <span class="small">(' + s.latlngs.length + ' corners)</span></span>' +
-             '<button data-act="edit" data-i="' + i + '">' + (i === selected ? 'editing' : 'adjust') + '</button>' +
-             '<button data-act="zoom" data-i="' + i + '">zoom</button>' +
-             '<button data-act="del" data-i="' + i + '" class="danger">delete</button></div>';
-      });
-      h += '<label class="done"><input type="checkbox" data-act="done" data-s="' + sh.id + '"' + (st.done ? ' checked' : '') + '> All ' + sh.expected_parts + ' shaded area' + (sh.expected_parts === 1 ? '' : 's') + ' on this map ' + (sh.expected_parts === 1 ? 'is' : 'are') + ' traced</label>';
-      h += '<textarea data-act="note" data-s="' + sh.id + '" placeholder="Anything unclear about this map? Write it here (optional)">' + esc(st.note) + '</textarea>';
-      box.innerHTML = h;
-      div.appendChild(box);
+      if (a.sheet !== lastSheet) {
+        var h = document.createElement('div'); h.className = 'sheethead';
+        h.textContent = SHEETS[a.sheet] ? SHEETS[a.sheet].name : a.sheet; div.appendChild(h); lastSheet = a.sheet;
+      }
+      var row = document.createElement('div');
+      row.className = 'arow' + (i === cur ? ' active' : '') + (st.done ? ' done' : '');
+      var mark = st.done ? '✓' : (mine.length ? '●' : '○');
+      var html = '<span class="mark">' + mark + '</span><span class="nm">Area ' + (i + 1) + '</span><span class="cnt">' + (mine.length ? mine.length + ' shape' + (mine.length === 1 ? '' : 's') : (st.note ? 'note' : '')) + '</span>';
+      row.innerHTML = html;
+      row.onclick = function (ev) { ev.stopPropagation(); goTo(i); };
+      div.appendChild(row);
+      if (i === cur && mine.length) {
+        mine.forEach(function (si) {
+          var s = shapes[si];
+          var sr = document.createElement('div');
+          sr.className = 'shape' + (si === selected ? ' sel' : '');
+          sr.innerHTML = '<span class="nm">' + esc(s.name) + ' <span class="small">(' + s.latlngs.length + ' corners)</span></span>' +
+            '<button data-act="edit" data-i="' + si + '">' + (si === selected ? 'editing' : 'adjust') + '</button>' +
+            '<button data-act="zoom" data-i="' + si + '">zoom</button>' +
+            '<button data-act="del" data-i="' + si + '" class="danger">delete</button>';
+          div.appendChild(sr);
+        });
+      }
     });
     var pill = $('progress');
-    pill.textContent = doneCount + ' of ' + JOB.sheets.length + ' maps done';
-    pill.className = 'pill' + (doneCount === JOB.sheets.length ? ' done' : '');
+    pill.textContent = doneCount + ' of ' + AREAS.length + ' areas done';
+    pill.className = 'pill' + (doneCount === AREAS.length ? ' done' : '');
     div.querySelectorAll('button').forEach(function (b) {
       b.onclick = function (ev) {
-        ev.stopPropagation();   // re-rendering below detaches this button; never let the click reach the map
-        var act = this.dataset.act, sid = this.dataset.s, i = +this.dataset.i;
-        if (act === 'show') showSheet(sid);
-        else if (act === 'goto') { var sh = sheetById(sid); activeSheet = sid; map.setView([sh.center.lat, sh.center.lng], sh.zoom); showSheet(sid); }
-        else if (act === 'draw') { showSheet(sid); var sh2 = sheetById(sid); if (!map.getBounds().contains([sh2.center.lat, sh2.center.lng])) map.setView([sh2.center.lat, sh2.center.lng], sh2.zoom); startDraw(sid); }
-        else if (act === 'edit') selectShape(i);
+        ev.stopPropagation();
+        var act = this.dataset.act, i = +this.dataset.i;
+        if (act === 'edit') selectShape(i);
         else if (act === 'zoom') map.fitBounds(shapes[i].layer.getBounds().pad(0.3));
         else if (act === 'del') { if (window.confirm('Delete this shape?')) deleteShape(i); }
       };
     });
-    div.querySelectorAll('input[type=checkbox]').forEach(function (c) {
-      c.onchange = function () { sheetState[this.dataset.s].done = this.checked; save(); renderSheets(); };
-    });
-    div.querySelectorAll('textarea').forEach(function (t) {
-      t.onchange = function () { sheetState[this.dataset.s].note = this.value; save(); };
-    });
   }
+  $('togglelist').onclick = function () {
+    var p = document.querySelector('.panel'); p.classList.toggle('collapsed');
+    this.textContent = p.classList.contains('collapsed') ? 'show list' : 'hide list';
+  };
 
-  // ---------- document viewer (pan + zoom) ----------
+  // ---------- right-hand viewer (snippets / full document), pan + zoom ----------
   var viewer = $('viewer'), img = $('docimg'), sel = $('docsel');
-  var tab = 'sheets', vs = { scale: 1, x: 0, y: 0 }, natural = { w: 1, h: 1 };
-  function docList() { return tab === 'sheets' ? JOB.sheets.map(function (s) { return { name: s.name, image: s.image, id: s.id }; }) : JOB.docs; }
-  function fillSel() {
-    sel.innerHTML = '';
-    docList().forEach(function (d, i) { var o = document.createElement('option'); o.value = i; o.textContent = (i + 1) + '. ' + d.name; sel.appendChild(o); });
-  }
-  function showDoc(i) {
-    var list = docList(); i = Math.max(0, Math.min(list.length - 1, i));
-    sel.value = i;
+  var tab = 'areas', vs = { scale: 1, x: 0, y: 0 }, natural = { w: 1, h: 1 };
+  function showImage(src) {
     img.onload = function () { natural = { w: img.naturalWidth, h: img.naturalHeight }; fitDoc(); };
-    img.src = list[i].image;
-  }
-  function showSheet(id) {
-    if (tab !== 'sheets') setTab('sheets');
-    for (var i = 0; i < JOB.sheets.length; i++) if (JOB.sheets[i].id === id) { showDoc(i); break; }
-    activeSheet = id; renderSheets();
+    img.src = src;
   }
   function fitDoc() {
     var W = viewer.clientWidth, H = viewer.clientHeight;
@@ -267,34 +296,47 @@
     window.addEventListener('mouseup', function () { drag = null; viewer.classList.remove('dragging'); });
   })();
   function setTab(t) {
+    if (tab === t) return;
     tab = t;
-    $('tab-sheets').classList.toggle('active', t === 'sheets');
+    $('tab-areas').classList.toggle('active', t === 'areas');
     $('tab-docs').classList.toggle('active', t === 'docs');
-    fillSel(); showDoc(0);
+    $('areabar').style.display = t === 'areas' ? '' : 'none';
+    $('docbar').style.display = t === 'docs' ? '' : 'none';
+    $('areaactions').style.display = t === 'areas' ? '' : 'none';
+    if (t === 'docs') { sel.innerHTML = ''; JOB.docs.forEach(function (d, i) { var o = document.createElement('option'); o.value = i; o.textContent = (i + 1) + '. ' + d.name; sel.appendChild(o); }); showDoc(0); }
+    else showImage(AREAS[cur].image);
   }
-  $('tab-sheets').onclick = function () { setTab('sheets'); };
+  function showDoc(i) { i = Math.max(0, Math.min(JOB.docs.length - 1, i)); sel.value = i; showImage(JOB.docs[i].image); }
+  $('tab-areas').onclick = function () { setTab('areas'); };
   $('tab-docs').onclick = function () { setTab('docs'); };
   sel.onchange = function () { showDoc(+sel.value); };
   $('docprev').onclick = function () { showDoc(+sel.value - 1); };
   $('docnext').onclick = function () { showDoc(+sel.value + 1); };
   $('docfit').onclick = fitDoc;
+  $('areafit').onclick = fitDoc;
   window.addEventListener('resize', fitDoc);
 
   // ---------- persistence ----------
   function snapshot() {
     return {
-      slug: JOB.slug, saved: new Date().toISOString(),
-      sheets: sheetState,
-      shapes: shapes.map(function (s) { return { sheet: s.sheet, name: s.name, pts: s.latlngs.map(function (ll) { return [ll.lat, ll.lng]; }) }; })
+      slug: JOB.slug, saved: new Date().toISOString(), cur: cur,
+      areas: areaState,
+      shapes: shapes.map(function (s) { return { area: s.area, name: s.name, pts: s.latlngs.map(function (ll) { return [ll.lat, ll.lng]; }) }; })
     };
   }
   function save() { try { localStorage.setItem(KEY, JSON.stringify(snapshot())); } catch (e) {} }
   function load(d) {
     finishEdit();
     shapes.forEach(function (s) { map.removeLayer(s.layer); }); shapes = [];
-    (d.shapes || []).forEach(function (r) { addShape(r.sheet, r.name, r.pts.map(function (c) { return L.latLng(c[0], c[1]); })); });
-    JOB.sheets.forEach(function (s) { var st = (d.sheets || {})[s.id]; sheetState[s.id] = { done: !!(st && st.done), note: (st && st.note) || '' }; });
-    renderSheets();
+    (d.shapes || []).forEach(function (r) {
+      var area = r.area;
+      if (!area && r.sheet) { for (var i = 0; i < AREAS.length; i++) if (AREAS[i].sheet === r.sheet) { area = AREAS[i].id; break; } }   // older saves
+      if (!area) area = AREAS[0].id;
+      addShape(area, r.name, r.pts.map(function (c) { return L.latLng(c[0], c[1]); }));
+    });
+    AREAS.forEach(function (a) { var st = (d.areas || {})[a.id]; areaState[a.id] = { done: !!(st && st.done), note: (st && st.note) || '' }; });
+    if (typeof d.cur === 'number') cur = Math.max(0, Math.min(AREAS.length - 1, d.cur));
+    renderList(); renderRight();
   }
   function restore() {
     try { var d = JSON.parse(localStorage.getItem(KEY) || 'null'); if (d) { load(d); if (shapes.length) status('Welcome back — your ' + shapes.length + ' saved shape(s) are restored.'); } } catch (e) {}
@@ -319,12 +361,12 @@
     rd.readAsText(f); this.value = '';
   };
   function fromGeoJSON(fc) {
-    var d = { slug: fc.metadata && fc.metadata.slug, sheets: (fc.metadata && fc.metadata.sheets) || {}, shapes: [] };
+    var d = { slug: fc.metadata && fc.metadata.slug, areas: (fc.metadata && fc.metadata.areas) || {}, shapes: [] };
     fc.features.forEach(function (f) {
       var rings = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates;
       rings.forEach(function (poly) {
         var ring = poly[0].slice(); if (ring.length > 1 && ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1]) ring.pop();
-        d.shapes.push({ sheet: f.properties.sheet_id, name: f.properties.name || 'Shape', pts: ring.map(function (c) { return [c[1], c[0]]; }) });
+        d.shapes.push({ area: f.properties.area_id, sheet: f.properties.sheet_id, name: f.properties.name || 'Shape', pts: ring.map(function (c) { return [c[1], c[0]]; }) });
       });
     });
     return d;
@@ -347,11 +389,11 @@
     var today = new Date().toISOString().slice(0, 10);
     return {
       type: 'FeatureCollection',
-      metadata: { slug: JOB.slug, display: JOB.display, submitted: new Date().toISOString(), tool: 'a4-tracer/1', sheets: sheetState },
+      metadata: { slug: JOB.slug, display: JOB.display, submitted: new Date().toISOString(), tool: 'a4-tracer/2', areas: areaState },
       features: shapes.map(function (s, i) {
         var ring = s.latlngs.map(function (ll) { return [+ll.lng.toFixed(6), +ll.lat.toFixed(6)]; }); ring.push(ring[0]);
-        var sh = sheetById(s.sheet);
-        return { type: 'Feature', properties: { id: i + 1, sheet_id: s.sheet, sheet_name: sh ? sh.name : s.sheet, name: s.name, note: sheetState[s.sheet].note || '', source: 'human-traced', lpa: JOB.slug, traced_date: today },
+        var a = areaById(s.area), sh = a && SHEETS[a.sheet];
+        return { type: 'Feature', properties: { id: i + 1, area_id: s.area, area_name: a ? a.name : s.area, sheet_id: a ? a.sheet : '', sheet_name: sh ? sh.name : '', name: s.name, note: areaState[s.area] ? areaState[s.area].note : '', source: 'human-traced', lpa: JOB.slug, traced_date: today },
                  geometry: { type: 'Polygon', coordinates: [ring] } };
       })
     };
@@ -359,11 +401,11 @@
   $('submit').onclick = function () {
     finishEdit(); if (drawing) cancelDraw();
     var problems = [], warnings = [];
-    JOB.sheets.forEach(function (sh, idx) {
-      var n = shapes.filter(function (s) { return s.sheet === sh.id; }).length, st = sheetState[sh.id];
-      if (!n && !st.note) problems.push('Map ' + (idx + 1) + ' has no shapes and no note explaining why.');
-      else if (!st.done && !st.note) problems.push('Map ' + (idx + 1) + ' is not ticked as finished (tick the box, or write a note if something is unclear).');
-      if (n && n !== sh.expected_parts) warnings.push('Map ' + (idx + 1) + ': the map shows ' + sh.expected_parts + ' shaded area' + (sh.expected_parts === 1 ? '' : 's') + ' but you have drawn ' + n + ' shape' + (n === 1 ? '' : 's') + '. Fine if the map really differs — just check.');
+    AREAS.forEach(function (a, i) {
+      var n = shapesFor(a.id).length, st = areaState[a.id];
+      if (!n && !st.note.trim()) problems.push('Area ' + (i + 1) + ' (' + (SHEETS[a.sheet] ? SHEETS[a.sheet].name.split(':')[0] : a.sheet) + ') has no shape and no note explaining why.');
+      else if (!st.done && !st.note.trim()) problems.push('Area ' + (i + 1) + ' is not marked done (press "Done — next area" on it, or write a note if something is unclear).');
+      if (n && n !== a.expected_parts) warnings.push('Area ' + (i + 1) + ': expected ' + a.expected_parts + ' shape' + (a.expected_parts === 1 ? '' : 's') + ' but ' + n + ' drawn. Fine if the snippet really shows that — just check.');
     });
     shapes.forEach(function (s) { if (ringAreaM2(s.latlngs) < 150) warnings.push('"' + s.name + '" is tiny (under 150 m²) — was that a slip?'); });
     var body = '';
@@ -374,7 +416,7 @@
       return;
     }
     if (warnings.length) body += '<div class="warn"><b>Worth a quick double-check:</b><ul>' + warnings.map(function (p) { return '<li>' + esc(p) + '</li>'; }).join('') + '</ul></div>';
-    body += '<div class="ok">You have drawn <b>' + shapes.length + ' shape' + (shapes.length === 1 ? '' : 's') + '</b> across ' + JOB.sheets.length + ' maps. Clicking <b>Download</b> saves the file <code>' + JOB.slug + '-traced.geojson</code>.</div>';
+    body += '<div class="ok">You have drawn <b>' + shapes.length + ' shape' + (shapes.length === 1 ? '' : 's') + '</b> across ' + AREAS.length + ' areas. Clicking <b>Download</b> saves the file <code>' + JOB.slug + '-traced.geojson</code>.</div>';
     body += '<ol><li>Click <b>Download the file</b> below.</li><li>Reply to Anshul\'s email (subject <i>Article 4 tracing: ' + esc(JOB.display) + '</i>) and <b>attach the downloaded file</b>.</li><li>That\'s it — the shapes get checked automatically and you\'ll get an email back if anything needs a second look.</li></ol>';
     body += '<div class="actions"><button id="closesubmit">Not yet</button><button class="good" id="dosubmit">&#11015; Download the file</button></div>';
     openCard('Ready to send', body);
@@ -394,20 +436,20 @@
   $('overlay').addEventListener('click', function (e) { if (e.target === this) closeCard(); });
   function showHelp() {
     openCard('How to trace the Article 4 areas', '<ol>' +
-      '<li><b>Look at the council map on the right.</b> The ' + esc(JOB.shade_description) + ' are the areas to trace. Scroll to zoom it, drag to move it. The <i>Full document</i> tab has every page of the legal direction.</li>' +
-      '<li><b>Click "Go there on the map"</b> for a map sheet: the live map on the left jumps to the same place. Use the street names on both to line them up. The <i>Satellite</i> view (top-right of the map) can help too.</li>' +
-      '<li><b>Click "Draw a shape"</b>, then click around the edge of one shaded area, corner by corner. Click the first dot again (or press <span class="kbd">Enter</span>) to finish. <span class="kbd">z</span> undoes the last corner, <span class="kbd">Esc</span> cancels.</li>' +
-      '<li><b>Adjust</b> any shape later: click it (or "adjust"), then drag the yellow dots. Drag a white dot to add a corner; right-click a dot to remove it.</li>' +
-      '<li>Draw one shape per shaded area. When every shaded area on a sheet is traced, <b>tick the box</b>. If something is unclear, write a note in the box instead — don\'t guess.</li>' +
-      '<li>Your work <b>saves automatically in this browser</b>. Use <i>Download a backup</i> if you switch computers.</li>' +
-      '<li>When all maps are ticked, press <b>Submit</b>, download the file and attach it to a reply to Anshul\'s email.</li></ol>' +
-      '<p class="small">Be as exact as you can: follow the edge of the shading, not the road. If the shading stops halfway along a building, so should your shape.</p>' +
+      '<li><b>The right-hand side shows one shaded area at a time</b>, cut from the council\'s official map. The ' + esc(JOB.shade_description) + ' are what you trace. Scroll to zoom the snippet, drag to move it.</li>' +
+      '<li><b>The live map on the left is already at the same place</b> (the dashed blue box shows roughly where the snippet sits). Line them up using the street names; the <i>Satellite</i> view (top right of the map) helps with building outlines.</li>' +
+      '<li>Press <b>Draw a shape</b>, then click around the edge of the shaded area, corner by corner. Click the first dot again (or press <span class="kbd">Enter</span>) to finish. <span class="kbd">z</span> undoes the last corner, <span class="kbd">Esc</span> cancels.</li>' +
+      '<li><b>Adjust</b> a shape by clicking it: drag the yellow dots. Drag a white dot to add a corner; right-click a dot to remove it.</li>' +
+      '<li>Press <b>Done — next area</b>. The snippet and the map both move on to the next area. Use ← → to go back to any area.</li>' +
+      '<li>If a snippet is unclear or you can\'t find the place, write a note in the box under it instead of guessing, then press Done.</li>' +
+      '<li>Your work <b>saves automatically in this browser</b>. When every area is done, press <b>Submit</b> (bottom left), download the file and attach it to a reply to Anshul\'s email.</li></ol>' +
+      '<p class="small">Be exact: follow the edge of the shading, not the road. If the shading stops halfway along a building, so should your shape. The <i>Full document</i> tab shows every page of the signed direction if you need context.</p>' +
       '<div class="actions"><button class="primary" id="closesubmit">Got it</button></div>');
   }
   $('help').onclick = showHelp;
 
   // ---------- boot ----------
-  fillSel(); showDoc(0);
-  restore(); renderSheets();
+  restore();
+  goTo(cur);
   try { if (!localStorage.getItem(KEY + ':seen')) { showHelp(); localStorage.setItem(KEY + ':seen', '1'); } } catch (e) {}
 })();
