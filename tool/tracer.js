@@ -66,6 +66,12 @@
   var areaBox = L.rectangle([[0, 0], [0, 0]], { color: '#1a73e8', weight: 2, dashArray: '6 6', fill: false, interactive: false }).addTo(map);
 
   function status(t) { $('status').textContent = t || ''; }
+  // keep the area clear of the side panel when centring the map on it
+  function fitArea(bounds) {
+    var p = document.querySelector('.panel');
+    var left = (p && !p.classList.contains('collapsed')) ? p.offsetWidth + 24 : 30;
+    map.fitBounds(bounds, { paddingTopLeft: [left, 30], paddingBottomRight: [30, 30], maxZoom: 18 });
+  }
   function areaById(id) { for (var i = 0; i < AREAS.length; i++) if (AREAS[i].id === id) return AREAS[i]; }
   function areaIndex(id) { for (var i = 0; i < AREAS.length; i++) if (AREAS[i].id === id) return i; return -1; }
   function shapesFor(id) { var out = []; shapes.forEach(function (s, i) { if (s.area === id) out.push(i); }); return out; }
@@ -76,7 +82,7 @@
     finishEdit();
     cur = Math.max(0, Math.min(AREAS.length - 1, i));
     var a = AREAS[cur];
-    if (flyMap !== false) map.fitBounds(a.bounds, { padding: [30, 30], maxZoom: 18 });
+    if (flyMap !== false) fitArea(a.bounds);
     areaBox.setBounds(a.bounds);
     setTab('areas');
     showImage(a.image);
@@ -96,7 +102,7 @@
   $('aprev').onclick = function () { goTo(cur - 1); };
   $('anext').onclick = function () { goTo(cur + 1); };
   $('adraw').onclick = function () { startDraw(AREAS[cur].id); };
-  $('arecentre').onclick = function () { map.fitBounds(AREAS[cur].bounds, { padding: [30, 30], maxZoom: 18 }); };
+  $('arecentre').onclick = function () { fitArea(AREAS[cur].bounds); };
   $('anote').onchange = function () { areaState[AREAS[cur].id].note = this.value; save(); renderList(); };
   $('adone').onclick = function () {
     var a = AREAS[cur], st = areaState[a.id], n = shapesFor(a.id).length;
@@ -114,7 +120,7 @@
     finishEdit();
     if (drawing) cancelDraw();
     var a = areaById(areaId);
-    if (!map.getBounds().intersects(L.latLngBounds(a.bounds))) map.fitBounds(a.bounds, { padding: [30, 30], maxZoom: 18 });
+    if (!map.getBounds().intersects(L.latLngBounds(a.bounds))) fitArea(a.bounds);
     drawing = { area: areaId, latlngs: [], line: L.polyline([], { color: '#d00', weight: 3 }).addTo(map), firstMarker: null };
     $('map').classList.add('drawing');
     $('drawbar').style.display = 'block';
@@ -440,7 +446,7 @@
       var n = shapesFor(a.id).length, st = areaState[a.id];
       if (!n && !st.note.trim()) problems.push('Area ' + (i + 1) + ' (' + (SHEETS[a.sheet] ? SHEETS[a.sheet].name.split(':')[0] : a.sheet) + ') has no shape and no note explaining why.');
       else if (!st.done && !st.note.trim()) problems.push('Area ' + (i + 1) + ' is not marked done (press "Done — next area" on it, or write a note if something is unclear).');
-      if (n && n !== a.expected_parts) warnings.push('Area ' + (i + 1) + ': expected ' + a.expected_parts + ' shape' + (a.expected_parts === 1 ? '' : 's') + ' but ' + n + ' drawn. Fine if the snippet really shows that — just check.');
+      if (n && (a.parts_rule === 'min' ? n < a.expected_parts : n !== a.expected_parts)) warnings.push('Area ' + (i + 1) + ': expected ' + (a.parts_rule === 'min' ? 'at least ' : '') + a.expected_parts + ' shape' + (a.expected_parts === 1 ? '' : 's') + ' but ' + n + ' drawn. Fine if the snippet really shows that — just check.');
     });
     shapes.forEach(function (s) { if (ringAreaM2(s.latlngs) < 150) warnings.push('"' + s.name + '" is tiny (under 150 m²) — was that a slip?'); });
     var body = '';
