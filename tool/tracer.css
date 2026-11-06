@@ -77,6 +77,8 @@ button.tiny{font-size:11px;padding:2px 7px}
 .areastat.part{color:#1a73e8}
 .areastat.ok{color:#0a7d4f;font-weight:600}
 .viewer{min-height:200px}
+.cloud{font-size:11px;color:#92400e;margin-top:6px;min-height:14px}
+.cloud.ok{color:#0a7d4f}
 .bottom{margin-top:10px;border-top:1px solid #ddd;padding-top:10px}
 .bottom button{width:100%;margin-top:5px}
 .small{font-size:11px;color:#666}

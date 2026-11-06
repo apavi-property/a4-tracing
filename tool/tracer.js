@@ -7,6 +7,41 @@
   var JOB = window.JOB;
   var KEY = 'a4trace:' + JOB.slug;
   var $ = function (id) { return document.getElementById(id); };
+
+  // ---------- receiver (Google Apps Script -> Drive); see tool/config.js ----------
+  var RECEIVER = (window.A4_RECEIVER && window.A4_RECEIVER.url) ? window.A4_RECEIVER : null;
+  var CLIENT = (function () {
+    try {
+      var c = localStorage.getItem('a4trace:client');
+      if (!c) { c = Math.random().toString(36).slice(2, 10); localStorage.setItem('a4trace:client', c); }
+      return c;
+    } catch (e) { return 'nostore'; }
+  })();
+  function payload(kind) { return JSON.stringify({ key: RECEIVER.key, kind: kind, slug: JOB.slug, client: CLIENT, data: toGeoJSON() }); }
+  function send(kind) {
+    // text/plain body = a "simple" request (no CORS preflight), which Apps Script accepts
+    return fetch(RECEIVER.url, { method: 'POST', body: payload(kind), redirect: 'follow' })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { if (!j || !j.ok) throw new Error((j && j.error) || 'not saved'); return j; });
+  }
+  var draftTimer = null, lastSent = '';
+  function cloud(t, ok) { var c = $('cloud'); if (c) { c.textContent = t; c.className = 'cloud' + (ok ? ' ok' : ''); } }
+  function syncDraft() {
+    if (!RECEIVER || !shapes.length) return;
+    var body = payload('draft');
+    if (body === lastSent) return;
+    send('draft').then(function () {
+      lastSent = body;
+      cloud('☁ Saved to Anshul’s Drive at ' + new Date().toTimeString().slice(0, 5), true);
+    }).catch(function () { cloud('☁ Not synced yet (will retry) — your work is still saved in this browser', false); });
+  }
+  function scheduleDraft() { if (!RECEIVER) return; clearTimeout(draftTimer); draftTimer = setTimeout(syncDraft, 20000); }
+  // last-chance sync when the tab is hidden or closed (no response needed)
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'hidden' && RECEIVER && shapes.length && navigator.sendBeacon) {
+      try { navigator.sendBeacon(RECEIVER.url, payload('draft')); } catch (e) {}
+    }
+  });
   var AREAS = JOB.areas;
   var SHEETS = {}; JOB.sheets.forEach(function (s) { SHEETS[s.id] = s; });
 
@@ -324,7 +359,7 @@
       shapes: shapes.map(function (s) { return { area: s.area, name: s.name, pts: s.latlngs.map(function (ll) { return [ll.lat, ll.lng]; }) }; })
     };
   }
-  function save() { try { localStorage.setItem(KEY, JSON.stringify(snapshot())); } catch (e) {} }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(snapshot())); } catch (e) {} scheduleDraft(); }
   function load(d) {
     finishEdit();
     shapes.forEach(function (s) { map.removeLayer(s.layer); }); shapes = [];
@@ -416,16 +451,40 @@
       return;
     }
     if (warnings.length) body += '<div class="warn"><b>Worth a quick double-check:</b><ul>' + warnings.map(function (p) { return '<li>' + esc(p) + '</li>'; }).join('') + '</ul></div>';
-    body += '<div class="ok">You have drawn <b>' + shapes.length + ' shape' + (shapes.length === 1 ? '' : 's') + '</b> across ' + AREAS.length + ' areas. Clicking <b>Download</b> saves the file <code>' + JOB.slug + '-traced.geojson</code>.</div>';
-    body += '<ol><li>Click <b>Download the file</b> below.</li><li>Reply to Anshul\'s email (subject <i>Article 4 tracing: ' + esc(JOB.display) + '</i>) and <b>attach the downloaded file</b>.</li><li>That\'s it — the shapes get checked automatically and you\'ll get an email back if anything needs a second look.</li></ol>';
-    body += '<div class="actions"><button id="closesubmit">Not yet</button><button class="good" id="dosubmit">&#11015; Download the file</button></div>';
+    body += '<div class="ok">You have drawn <b>' + shapes.length + ' shape' + (shapes.length === 1 ? '' : 's') + '</b> across ' + AREAS.length + ' areas.</div>';
+    if (RECEIVER) {
+      body += '<p>Press <b>Send to Anshul</b>. Your shapes go straight to him — no file to download or attach. You\'ll get an email back if anything needs a second look.</p>';
+      body += '<div class="actions"><button id="closesubmit">Not yet</button><button class="good" id="dosend">&#10148; Send to Anshul</button></div><div id="sendresult"></div>';
+    } else {
+      body += manualSteps();
+    }
     openCard('Ready to send', body);
-    $('dosubmit').onclick = function () {
-      download(JOB.slug + '-traced.geojson', JSON.stringify(toGeoJSON()), 'application/geo+json');
-      $('dosubmit').textContent = 'Downloaded — now attach it to your reply';
-      $('dosubmit').disabled = true;
-    };
+    if (RECEIVER) {
+      $('dosend').onclick = function () {
+        var b = this; b.disabled = true; b.textContent = 'Sending…';
+        send('submit').then(function () {
+          syncDraft();
+          openCard('Sent ✓', '<div class="ok"><b>Thank you!</b> Your ' + shapes.length + ' shape' + (shapes.length === 1 ? '' : 's') + ' for ' + esc(JOB.display) + ' reached Anshul. There is nothing else to do — you\'ll get an email if anything needs a second look.</div><div class="actions"><button class="primary" id="closesubmit">Close</button></div>');
+        }).catch(function () {
+          b.textContent = 'Could not send';
+          $('sendresult').innerHTML = '<div class="warn">Sending didn\'t work (internet hiccup?). Try again in a minute, or use the backup way:</div>' + manualSteps();
+          b.disabled = false; b.textContent = '↻ Try again';
+          wireDownload();
+        });
+      };
+    } else wireDownload();
   };
+  function manualSteps() {
+    return '<ol><li>Click <b>Download the file</b> below (it saves <code>' + JOB.slug + '-traced.geojson</code>).</li><li>Reply to Anshul\'s email (subject <i>Article 4 tracing: ' + esc(JOB.display) + '</i>) and <b>attach the downloaded file</b>.</li></ol>' +
+      '<div class="actions"><button class="good" id="dosubmit">&#11015; Download the file</button></div>';
+  }
+  function wireDownload() {
+    var d = $('dosubmit'); if (!d) return;
+    d.onclick = function () {
+      download(JOB.slug + '-traced.geojson', JSON.stringify(toGeoJSON()), 'application/geo+json');
+      d.textContent = 'Downloaded — now attach it to your reply'; d.disabled = true;
+    };
+  }
 
   // ---------- help / cards ----------
   function openCard(title, html) {
@@ -451,5 +510,7 @@
   // ---------- boot ----------
   restore();
   goTo(cur);
+  // send anything already saved in this browser as soon as the page opens
+  if (RECEIVER && shapes.length) setTimeout(syncDraft, 2500);
   try { if (!localStorage.getItem(KEY + ':seen')) { showHelp(); localStorage.setItem(KEY + ':seen', '1'); } } catch (e) {}
 })();
