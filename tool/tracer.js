@@ -65,6 +65,80 @@
   // faint box showing where the current snippet sits on the live map
   var areaBox = L.rectangle([[0, 0], [0, 0]], { color: '#1a73e8', weight: 2, dashArray: '6 6', fill: false, interactive: false }).addTo(map);
 
+  // ---------- council map laid over the live map ----------
+  // The council's own sheet, lined up from landmarks, sits above the street map / satellite
+  // and below the drawn shapes. "multiply" blending makes its white paper see-through, so
+  // only its building lines and shading show. Clicks pass straight through to the map.
+  var councilPane = map.createPane('council');
+  councilPane.style.zIndex = 350;
+  councilPane.style.pointerEvents = 'none';
+  councilPane.style.mixBlendMode = 'multiply';
+  var OVKEY = KEY + ':overlay', NUDGE_M = 2;
+  var ov = { layer: null, sheet: null, on: true, opacity: 0.75, nudge: {} };
+  try { var ovs = JSON.parse(localStorage.getItem(OVKEY) || 'null'); if (ovs) { ov.on = ovs.on !== false; ov.opacity = typeof ovs.opacity === 'number' ? ovs.opacity : ov.opacity; ov.nudge = ovs.nudge || {}; } } catch (e) {}
+  function saveOv() { try { localStorage.setItem(OVKEY, JSON.stringify({ on: ov.on, opacity: ov.opacity, nudge: ov.nudge })); } catch (e) {} }
+  function overlayBounds(sh) {
+    var b = sh.overlay.bounds, n = ov.nudge[sh.id] || [0, 0];
+    var dlat = n[1] / 111320, dlng = n[0] / (111320 * Math.cos((b[0][0] + b[1][0]) / 2 * Math.PI / 180));
+    return L.latLngBounds([b[0][0] + dlat, b[0][1] + dlng], [b[1][0] + dlat, b[1][1] + dlng]);
+  }
+  var OvControl = L.Control.extend({
+    options: { position: 'topright' },
+    onAdd: function () {
+      var d = L.DomUtil.create('div', 'ovctl leaflet-bar');
+      d.innerHTML = '<label class="ovon"><input type="checkbox" id="ovon"> <b>Council map on top</b> <span class="kbd">o</span></label>' +
+        '<div class="ovrow"><span class="small">see-through</span><input type="range" id="ovop" min="10" max="100" step="5"><span class="small">solid</span></div>' +
+        '<div class="ovrow nudge"><span class="small">Line it up with the streets:</span>' +
+        '<button data-d="-1,0" title="move left">&larr;</button><button data-d="0,1" title="move up">&uarr;</button><button data-d="0,-1" title="move down">&darr;</button><button data-d="1,0" title="move right">&rarr;</button>' +
+        '<button id="ovreset" title="back to where it started">reset</button></div><div class="small" id="ovinfo"></div>';
+      L.DomEvent.disableClickPropagation(d); L.DomEvent.disableScrollPropagation(d);
+      return d;
+    }
+  });
+  var ovCtl = new OvControl();
+  function renderOvCtl() {
+    var sh = ov.sheet && SHEETS[ov.sheet], c = ovCtl.getContainer();
+    if (!c) return;
+    c.style.display = sh ? '' : 'none';
+    if (!sh) return;
+    $('ovon').checked = ov.on;
+    $('ovop').value = Math.round(ov.opacity * 100);
+    var n = ov.nudge[sh.id] || [0, 0];
+    $('ovinfo').textContent = (n[0] || n[1]) ? 'Moved ' + Math.abs(n[0]) + ' m ' + (n[0] < 0 ? 'left' : 'right') + ', ' + Math.abs(n[1]) + ' m ' + (n[1] < 0 ? 'down' : 'up') + ' (for this whole map sheet)' : '';
+  }
+  function showOverlay(sheetId) {
+    var sh = SHEETS[sheetId];
+    if (!sh || !sh.overlay) {
+      if (ov.layer) map.removeLayer(ov.layer);
+      ov.layer = null; ov.sheet = null; renderOvCtl(); return;
+    }
+    if (ov.sheet !== sheetId || !ov.layer) {
+      if (ov.layer) map.removeLayer(ov.layer);
+      ov.layer = L.imageOverlay(sh.overlay.image, overlayBounds(sh), { pane: 'council', interactive: false });
+      ov.sheet = sheetId;
+    } else ov.layer.setBounds(overlayBounds(sh));
+    if (ov.on && !map.hasLayer(ov.layer)) ov.layer.addTo(map);
+    if (!ov.on && map.hasLayer(ov.layer)) map.removeLayer(ov.layer);
+    councilPane.style.opacity = ov.opacity;
+    renderOvCtl();
+  }
+  function toggleOverlay() { ov.on = !ov.on; saveOv(); showOverlay(ov.sheet || AREAS[cur].sheet); }
+  if (JOB.sheets.some(function (s) { return s.overlay; })) {
+    ovCtl.addTo(map);
+    $('ovon').onchange = function () { ov.on = this.checked; saveOv(); showOverlay(ov.sheet); };
+    $('ovop').oninput = function () { ov.opacity = +this.value / 100; councilPane.style.opacity = ov.opacity; saveOv(); };
+    ovCtl.getContainer().querySelectorAll('button[data-d]').forEach(function (b) {
+      b.onclick = function (ev) {
+        ev.stopPropagation();
+        var d = this.dataset.d.split(',').map(Number), n = ov.nudge[ov.sheet] || [0, 0];
+        ov.nudge[ov.sheet] = [n[0] + d[0] * NUDGE_M, n[1] + d[1] * NUDGE_M];
+        if (!ov.on) ov.on = true;
+        saveOv(); showOverlay(ov.sheet);
+      };
+    });
+    $('ovreset').onclick = function (ev) { ev.stopPropagation(); delete ov.nudge[ov.sheet]; saveOv(); showOverlay(ov.sheet); };
+  }
+
   function status(t) { $('status').textContent = t || ''; }
   // keep the area clear of the side panel when centring the map on it
   function fitArea(bounds) {
@@ -84,6 +158,7 @@
     var a = AREAS[cur];
     if (flyMap !== false) fitArea(a.bounds);
     areaBox.setBounds(a.bounds);
+    showOverlay(a.sheet);
     setTab('areas');
     showImage(a.image);
     renderRight(); renderList();
@@ -183,6 +258,7 @@
     if ((e.key === 'z' || e.key === 'Backspace') && drawing) { e.preventDefault(); undoVertex(); }
     if (e.key === 'Escape') { if (drawing) cancelDraw(); else finishEdit(); }
     if (e.key === 'Enter' && drawing) closeDraw();
+    if (e.key === 'o' && !e.metaKey && !e.ctrlKey && ovCtl.getContainer()) toggleOverlay();
   });
   $('drawfinish').onclick = closeDraw;
   $('drawundo').onclick = undoVertex;
@@ -216,7 +292,7 @@
     selected = i;
     var s = shapes[i];
     var ai = areaIndex(s.area);
-    if (ai >= 0 && ai !== cur) { cur = ai; areaBox.setBounds(AREAS[cur].bounds); showImage(AREAS[cur].image); renderRight(); }
+    if (ai >= 0 && ai !== cur) { cur = ai; areaBox.setBounds(AREAS[cur].bounds); showOverlay(AREAS[cur].sheet); showImage(AREAS[cur].image); renderRight(); }
     s.latlngs.forEach(function (ll, vi) {
       var m = L.circleMarker(ll, { radius: 8, weight: 2, color: '#d00', fillColor: '#ffe600', fillOpacity: 1 }).addTo(map);
       enableDrag(m, function (nll) { s.latlngs[vi] = nll; s.layer.setLatLngs(s.latlngs); }, function () { rebuildMids(s); save(); });
@@ -430,7 +506,7 @@
     var today = new Date().toISOString().slice(0, 10);
     return {
       type: 'FeatureCollection',
-      metadata: { slug: JOB.slug, display: JOB.display, submitted: new Date().toISOString(), tool: 'a4-tracer/2', areas: areaState },
+      metadata: { slug: JOB.slug, display: JOB.display, submitted: new Date().toISOString(), tool: 'a4-tracer/3', areas: areaState, overlay_nudge_m: ov.nudge },
       features: shapes.map(function (s, i) {
         var ring = s.latlngs.map(function (ll) { return [+ll.lng.toFixed(6), +ll.lat.toFixed(6)]; }); ring.push(ring[0]);
         var a = areaById(s.area), sh = a && SHEETS[a.sheet];
@@ -503,11 +579,13 @@
     openCard('How to trace the Article 4 areas', '<ol>' +
       '<li><b>The right-hand side shows one shaded area at a time</b>, cut from the council\'s official map. The ' + esc(JOB.shade_description) + ' are what you trace. Scroll to zoom the snippet, drag to move it.</li>' +
       '<li><b>The live map on the left is already at the same place</b> (the dashed blue box shows roughly where the snippet sits). Line them up using the street names; the <i>Satellite</i> view (top right of the map) helps with building outlines.</li>' +
+      (JOB.sheets.some(function (s) { return s.overlay; }) ?
+        '<li><b>The council map is also laid over the live map</b>, see-through, so you can trace the shading directly on top of it. Use the slider (top right) to fade it in or out, or press <span class="kbd">o</span> to switch it on and off. If its streets sit a little off the real streets, nudge it with the arrows until they line up (this sticks for that whole map sheet).</li>' : '') +
       '<li>Press <b>Draw a shape</b>, then click around the edge of the shaded area, corner by corner. Click the first dot again (or press <span class="kbd">Enter</span>) to finish. <span class="kbd">z</span> undoes the last corner, <span class="kbd">Esc</span> cancels.</li>' +
       '<li><b>Adjust</b> a shape by clicking it: drag the yellow dots. Drag a white dot to add a corner; right-click a dot to remove it.</li>' +
       '<li>Press <b>Done — next area</b>. The snippet and the map both move on to the next area. Use ← → to go back to any area.</li>' +
       '<li>If a snippet is unclear or you can\'t find the place, write a note in the box under it instead of guessing, then press Done.</li>' +
-      '<li>Your work <b>saves automatically in this browser</b>. When every area is done, press <b>Submit</b> (bottom left), download the file and attach it to a reply to Anshul\'s email.</li></ol>' +
+      '<li>Your work <b>saves automatically</b>. When every area is done, press <b>Submit</b> (bottom left) ' + (RECEIVER ? 'then <b>Send to Anshul</b>: it goes straight to him. Please finish and submit on the same computer and browser you did most of the work on.' : ', download the file and attach it to a reply to Anshul\'s email.') + '</li></ol>' +
       '<p class="small">Be exact: follow the edge of the shading, not the road. If the shading stops halfway along a building, so should your shape. The <i>Full document</i> tab shows every page of the signed direction if you need context.</p>' +
       '<div class="actions"><button class="primary" id="closesubmit">Got it</button></div>');
   }
