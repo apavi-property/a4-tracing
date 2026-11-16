@@ -225,7 +225,7 @@ var D = {"slug": "north-herts", "display": "North Herts", "round": 5, "areas": [
       (osG ? '<li><b>OS map</b> (right-hand side): the council’s own map sheet, which is drawn on Ordnance Survey mapping, laid on the ground so you can see building outlines, street names and house numbers. Purple = the council’s shading. Press <span class="kbd">O</span> to flip between it and the satellite photo.</li>' : '') +
       '<li><span class="kbd">Enter</span> = looks right, next area &middot; <span class="kbd">Q</span> = query (type a note) &middot; <span class="kbd">←</span> <span class="kbd">→</span> = move between areas.</li>' +
       '<li>When you’re through, press <b>Summary &amp; sign-off</b> and paste the text to Claude.</li></ul>' +
-      '<p style="font-size:12px;color:#555">Left is the legal document; right is what goes into the register. The same buildings should be shaded on both. (When you press L, the outlines are nudged by up to a metre or two per area to allow for stretch in the paper scan.)</p><div class="actions"><button class="ok" id="close">Got it</button></div>');
+      '<p style="font-size:12px;color:#555">Left is the legal document; right is what goes into the register. The same buildings should be shaded on both. (The signed copy is a scan or photo of the paper, so when you press L the outlines are shifted a little per area to sit on it; an area’s note says so when that shift is more than 2 m. The polygons on the right are never shifted.)</p><div class="actions"><button class="ok" id="close">Got it</button></div>');
     $('close').onclick = function () { $('overlay').classList.remove('show'); };
   };
 
