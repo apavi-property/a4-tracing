@@ -1,0 +1,10 @@
+{
+ "source": "HM Land Registry INSPIRE Index Polygons",
+ "file_date": "2023-03-05",
+ "grid_shift_m": [
+  1.78,
+  -0.07
+ ],
+ "rings": 40367,
+ "sheets": 62
+}
