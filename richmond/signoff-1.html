@@ -48,6 +48,9 @@ header button{background:#374151;color:#fff;border-color:#4b5563}
 .card h2{margin:0 0 10px;font-size:20px}
 .card textarea{width:100%;min-height:140px;font:12px/1.4 ui-monospace,Menlo,monospace}
 .card .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:12px;flex-wrap:wrap}
+.osmsg{color:#92400e;font-weight:600}
+.panehead button{padding:2px 8px;font-size:12px}
+.card input{width:100%;font:13px ui-monospace,Menlo,monospace;padding:7px;margin-top:4px}
 .kbd{background:#eee;border:1px solid #ccc;border-radius:3px;padding:0 5px;font-family:monospace;font-size:12px}
 @media (max-width:820px){.main{flex-direction:column}.pane+.pane{border-left:none;border-top:3px solid #1f2937}.pane{min-height:42vh}}
 </style></head><body>
@@ -66,7 +69,7 @@ header button{background:#374151;color:#fff;border-color:#4b5563}
     <div class="viewer" id="viewer"><img id="img" alt="council map with traced line"></div>
   </div>
   <div class="pane">
-    <div class="panehead"><b>On the ground</b><span class="legend"><i></i>Boundary going into the register (this site) &middot; grey = other areas</span><span class="spacer"></span><span id="oshint" style="display:none">OS map / satellite <span class="kbd">O</span></span></div>
+    <div class="panehead"><b>On the ground</b><span class="legend"><i></i>Boundary going into the register (this site) &middot; grey = other areas</span><span class="spacer"></span><span id="osmsg" class="osmsg" style="display:none"></span><span id="oshint" style="display:none">map / satellite <span class="kbd">O</span></span><button id="oskeybtn">OS map key</button></div>
     <div id="map"></div>
   </div>
 </div>
@@ -133,17 +136,57 @@ var D = {"slug": "richmond", "display": "Richmond upon Thames", "round": 1, "are
       svg.appendChild(g); osSvg[sid] = svg;
       osG.addLayer(L.svgOverlay(svg, o.bounds, { pane: 'os', attribution: 'Council map &copy; Crown copyright (Ordnance Survey)' }));
     });
-    bases['OS map'] = osG;
+    bases[D.os_single ? 'Official map' : 'Council map'] = osG;
   }
-  var baseKey = { sat: sat, osm: osm, os: osG };
+  // "OS map": Ordnance Survey's own detailed mapping (OS Maps API), the base councils draw their maps on.
+  // Tiles go straight from Ordnance Survey to this browser with the viewer's own key; the key lives in
+  // this browser's storage only - it is never in the page, the site or the repo.
+  var OSKEY = 'a4signoff:oskey', osKey = '', osd = null, osr = null, ctl = null;
+  try { osKey = localStorage.getItem(OSKEY) || ''; } catch (e) {}
+  function osNote(t) { var m = $('osmsg'); m.textContent = t || ''; m.style.display = t ? '' : 'none'; }
+  function mkOs(style) {
+    var bad = 0, good = 0;
+    var l = L.tileLayer('https://api.os.uk/maps/raster/v1/zxy/' + style + '_3857/{z}/{x}/{y}.png?key=' + encodeURIComponent(osKey),
+      { minZoom: 7, maxNativeZoom: 20, maxZoom: 21, attribution: 'Contains OS data &copy; Crown copyright and database rights' });
+    l.on('tileload', function (e) { if (e.coords.z > 16) { good++; osNote(''); } });
+    l.on('tileerror', function (e) {
+      if (e.coords.z > 16) {          // zoom 17+ is OS MasterMap (premium data); 16 and below is free open data
+        if (!good && ++bad >= 3 && l.options.maxNativeZoom > 16) {
+          l.options.maxNativeZoom = 16; l.redraw();
+          osNote('Ordnance Survey refused the detailed map: this key only gets the free, coarser one');
+        }
+      } else osNote('Ordnance Survey did not accept the key');
+    });
+    return l;
+  }
+  function osLayers() {
+    osNote('');
+    osd = osKey ? mkOs('Light') : null; osr = osKey ? mkOs('Road') : null;
+    baseKey.osd = osd; baseKey.osr = osr;
+    if (ctl && osd) { ctl.addBaseLayer(osd, 'OS map'); ctl.addBaseLayer(osr, 'OS map (colour)'); }
+    $('oskeybtn').textContent = osKey ? 'OS map key \u2713' : 'OS map key';
+    $('oshint').style.display = (osd || osG) ? '' : 'none';
+  }
+  function setOsKey(k) {
+    [osd, osr].forEach(function (l) { if (l) { if (map.hasLayer(l)) map.removeLayer(l); ctl.removeLayer(l); } });
+    osKey = (k || '').replace(/\s+/g, '');
+    try { if (osKey) localStorage.setItem(OSKEY, osKey); else localStorage.removeItem(OSKEY); } catch (e) {}
+    osLayers();
+    setBase(osKey ? 'osd' : (st.base === 'osd' || st.base === 'osr' ? 'sat' : st.base));
+  }
+  var baseKey = { sat: sat, osm: osm, os: osG, osd: null, osr: null };
+  osLayers();
   function setBase(k) {
     if (!baseKey[k]) k = 'sat';
     Object.keys(baseKey).forEach(function (x) { if (baseKey[x] && map.hasLayer(baseKey[x])) map.removeLayer(baseKey[x]); });
     map.addLayer(baseKey[k]); st.base = k; save();
+    if (k !== 'osd' && k !== 'osr') osNote('');
   }
-  setBase(st.base || (osG && !D.os_single ? 'os' : 'sat'));   // data rounds: the left pane already is the official map, so start on the satellite photo
-  L.control.layers(bases, null, { collapsed: false }).addTo(map);
-  map.on('baselayerchange', function (e) { Object.keys(baseKey).forEach(function (x) { if (baseKey[x] === e.layer) { st.base = x; save(); } }); });
+  // start on Ordnance Survey's own map when there is a key; else (data rounds: the left pane already is the official map) on the satellite photo
+  setBase(st.base && baseKey[st.base] ? st.base : (osd ? 'osd' : (osG && !D.os_single ? 'os' : 'sat')));
+  ctl = L.control.layers(bases, null, { collapsed: false }).addTo(map);
+  if (osd) { ctl.addBaseLayer(osd, 'OS map'); ctl.addBaseLayer(osr, 'OS map (colour)'); }
+  map.on('baselayerchange', function (e) { Object.keys(baseKey).forEach(function (x) { if (baseKey[x] === e.layer) { st.base = x; if (x === 'osd' || x === 'osr') st.osStyle = x; save(); } }); });
   var layers = {};
   D.features.forEach(function (f) {
     var id = f.properties.area_id;
@@ -194,13 +237,13 @@ var D = {"slug": "richmond", "display": "Richmond upon Thames", "round": 1, "are
   $('query').onclick = function () { st.dec[D.areas[cur].id] = 'q'; save(); chips(); var n = $('note'); n.style.display = 'block'; n.focus(); };
   $('note').oninput = function () { st.notes[D.areas[cur].id] = this.value; save(); };
   document.addEventListener('keydown', function (e) {
-    if (e.target.tagName === 'TEXTAREA') return;
+    if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
     if (e.key === 'ArrowRight') go(cur + 1);
     else if (e.key === 'ArrowLeft') go(cur - 1);
     else if (e.key === 'Enter') $('okbtn').click();
     else if (e.key === 'q' || e.key === 'Q') { e.preventDefault(); $('query').click(); }
     else if (e.key === 'l' || e.key === 'L') $('toggle').click();
-    else if ((e.key === 'o' || e.key === 'O') && osG) setBase(map.hasLayer(osG) ? 'sat' : 'os');
+    else if ((e.key === 'o' || e.key === 'O') && (osd || osG)) setBase(map.hasLayer(sat) ? (osd ? (st.osStyle || 'osd') : 'os') : 'sat');
     else if (e.key === 'Escape') $('overlay').classList.remove('show');
   });
 
@@ -223,14 +266,27 @@ var D = {"slug": "richmond", "display": "Richmond upon Thames", "round": 1, "are
   $('help').onclick = function () {
     card('How to sign off', '<ul><li><b>Left:</b> the official map from the direction (the legal document), with the boundary going into the register drawn on it in blue (the council’s own line, read from this map’s file). Press <span class="kbd">L</span> to hide/show the line. Scroll to zoom.</li>' +
       '<li><b>Right:</b> the same boundary on the ground, on the official map laid over the real world or on a satellite photo.</li>' +
-      (osG ? '<li><b>OS map</b> (right-hand side): the official map, which is drawn on Ordnance Survey mapping, laid on the ground so you can see buildings and street names. Red hatching = the area the direction applies to. Press <span class="kbd">O</span> to flip between it and the satellite photo.</li>' : '') +
+      (osG ? '<li><b>Official map</b> on the ground (right-hand side, pick it top right): the official map, which is drawn on Ordnance Survey mapping, laid on the ground so you can see buildings and street names. Red hatching = the area the direction applies to.</li>' : '') +
+      '<li><b>OS map</b> (right-hand side): Ordnance Survey’s own detailed map, the same mapping councils draw their maps on, so the buildings and street names on the right can be matched to the left at a glance. It comes straight from Ordnance Survey and needs an OS key: press <b>OS map key</b> above the map. Press <span class="kbd">O</span> to flip between the map and the satellite photo.</li>' +
       '<li><span class="kbd">Enter</span> = looks right, next area &middot; <span class="kbd">Q</span> = query (type a note) &middot; <span class="kbd">←</span> <span class="kbd">→</span> = move between areas.</li>' +
       '<li>When you’re through, press <b>Summary &amp; sign-off</b> and paste the text to Claude.</li></ul>' +
       '<p style="font-size:12px;color:#555">The blue boundary is what goes into the register (the council’s own line, read from this map’s file); the red on the map is the legal boundary. They should coincide. The map is placed on the ground by the coordinates the council’s map file carries.</p><div class="actions"><button class="ok" id="close">Got it</button></div>');
     $('close').onclick = function () { $('overlay').classList.remove('show'); };
   };
 
-  if (osG) $('oshint').style.display = '';
+  $('oskeybtn').onclick = function () {
+    card('Ordnance Survey map', '<p>The right-hand side can show <b>Ordnance Survey’s own detailed map</b> (building outlines, street names, house numbers): the same mapping councils draw their maps on, so the two sides can be compared like for like.</p>' +
+      '<p>It needs an OS Data Hub key. Paste it here once. It is kept in this browser only (not in this page or anywhere online) and is sent only to Ordnance Survey, to fetch the map.</p>' +
+      '<input id="oskeyin" type="password" autocomplete="off" spellcheck="false" placeholder="OS Data Hub project API key">' +
+      '<p style="font-size:12px;color:#555">To get one: sign in at osdatahub.os.uk, open <b>API Projects</b>, create a project, add <b>OS Maps API</b> to it and copy the <b>Project API Key</b>. Building outlines need the Premium plan; on the free OpenData plan the map stops at street level.</p>' +
+      '<div class="actions">' + (osKey ? '<button id="oskeydel">Remove saved key</button>' : '') + '<button id="close">Cancel</button><button class="ok" id="oskeysave">Save</button></div>');
+    var inp = $('oskeyin'); inp.focus();
+    var done = function (k) { $('overlay').classList.remove('show'); setOsKey(k); go(cur); };
+    $('oskeysave').onclick = function () { if (inp.value.replace(/\s+/g, '')) done(inp.value); };
+    inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') $('oskeysave').click(); });
+    if ($('oskeydel')) $('oskeydel').onclick = function () { done(''); };
+    $('close').onclick = function () { $('overlay').classList.remove('show'); };
+  };
   go(cur);
   setTimeout(function () { fit(); go(cur); }, 150);
   setTimeout(function () { map.invalidateSize(); go(cur); }, 800);      // late layout (slow first paint, resized window): zoom to the site again
